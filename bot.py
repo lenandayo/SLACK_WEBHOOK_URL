@@ -35,32 +35,23 @@ def nearest_amedas(lat, lon):
     return {"station_id": best[1], "name": best[2], "lat": best[3], "lon": best[4], "dist_m": round(best[0])}
 
 def latest_point_json(station_id):
-    # ex) 2025-09-17T07:10:00+09:00 -> ymd='20250917', h3='06'
     ttxt = requests.get(JMA_LATEST_TIME, timeout=20).text.strip()
-    dt = datetime.fromisoformat(ttxt)
+    dt = datetime.fromisoformat(ttxt)  # JST
     ymd = dt.strftime("%Y%m%d")
     h3 = f"{(dt.hour//3)*3:02d}"
     url = f"https://www.jma.go.jp/bosai/amedas/data/point/{station_id}/{ymd}_{h3}.json"
     js = requests.get(url, timeout=20).json()
-    # pick the latest timestamp key
     k = max(js.keys())
     return k, js[k]
 
-
-"""
-Build a dict like {'precipitation10m': '10分間降水量', 'temp': '気温', ...}
-from the official selector info JSON.
-"""
+# --- robust element label loader (dict/list both OK) ---
 def load_elem_labels():
-    import requests
     mapping = {}
-
     try:
         sel = requests.get(JMA_SELECTOR, timeout=20).json()
     except Exception:
         sel = None
 
-    # sel が dictでも list でも対応する
     if isinstance(sel, dict) and "selectors" in sel:
         blocks = sel["selectors"]
     elif isinstance(sel, list):
@@ -72,14 +63,14 @@ def load_elem_labels():
         if not isinstance(block, dict):
             continue
         key = block.get("key")
-        if key in ("elem", "elements"):  # どちらの表記でも
+        if key in ("elem", "elements"):
             for item in block.get("values", []):
                 val = item.get("value")
                 name = item.get("name") or item.get("ja") or val
                 if val:
                     mapping[val] = name
 
-    # 取得できなかった要素名はフォールバック（よく出るキー）
+    # fallbacks
     mapping.setdefault("temp", "気温")
     mapping.setdefault("humidity", "湿度")
     mapping.setdefault("wind", "風速")
@@ -97,63 +88,45 @@ def load_elem_labels():
     mapping.setdefault("visibility", "視程")
     return mapping
 
-
 def flatten_values(row: dict):
-    """Take first element if value is like [val, quality_flag]. Keep None if missing."""
     def take(v):
         if v is None: return None
         return v[0] if isinstance(v, list) else v
     return {k: take(v) for k, v in row.items()}
+
+# --- 風向を16方位名に ---
+DIR16 = ["北","北北東","北東","東北東","東","東南東","南東","南南東",
+         "南","南南西","南西","西南西","西","西北西","北西","北北西"]
+def dir16_name(code):
+    try:
+        i = int(code) % 16
+        return DIR16[i]
+    except Exception:
+        return str(code)
 
 def fmt_unit(key):
     units = {
         "temp": "℃",
         "humidity": "%",
         "wind": "m/s",
-        "windDirection": "",           # 方位コード（そのまま表示）
+        "gust": "m/s",
+        "windDirection": "",           # 方向は方位名に変換するので単位なし
+        "gustDirection": "",
         "precipitation10m": "mm/10m",
         "precipitation1h": "mm/h",
         "precipitation3h": "mm/3h",
         "precipitation24h": "mm",
         "snowDepth": "cm",
         "sunshine10m": "min/10m",
+        "pressure": "hPa",
+        "seaLevelPressure": "hPa",
+        "visibility": "km",
     }
     return units.get(key, "")
 
 def notify_slack(text):
-    if not SLACK_WEBHOOK: return
-    requests.post(SLACK_WEBHOOK, json={"text": text}, timeout=20)
-
-def notify_line(text):
-    if not LINE_TOKEN: return
-    headers = {"Authorization": f"Bearer {LINE_TOKEN}", "Content-Type": "application/json"}
-    payload = {"messages": [{"type": "text", "text": text[:1900]}]}
-    requests.post("https://api.line.me/v2/bot/message/broadcast", headers=headers, json=payload, timeout=20)
-
-def main():
-    st = nearest_amedas(LAT, LON)
-    tkey, row = latest_point_json(st["station_id"])
-    labels = load_elem_labels()
-    vals = flatten_values(row)
-
-    # Build lines: list only observed (non-None) elements
-    lines = [f"観測速報 {tkey[8:10]}:{tkey[10:12]}（JST） / アメダス{st['name']}（{st['dist_m']}m先）"]
-    for key in sorted(vals.keys()):
-        val = vals[key]
-        if val is None: continue
-        name = labels.get(key, key)
-        unit = fmt_unit(key)
-        if unit:
-            lines.append(f"- {name}: {val}{unit}")
-        else:
-            lines.append(f"- {name}: {val}")
-
-    lines.append("出典: 気象庁アメダス（速報値）")
-    msg = "\n".join(lines)
-
-    # Send
-    notify_slack(msg)
-    notify_line(msg)
-
-if __name__ == "__main__":
-    main()
+    if not SLACK_WEBHOOK: 
+        print("Slack webhook not set; skip"); 
+        return
+    r = requests.post(SLACK_WEBHOOK, json={"text": text}, timeout=20)
+    print
