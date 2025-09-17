@@ -46,30 +46,57 @@ def latest_point_json(station_id):
     k = max(js.keys())
     return k, js[k]
 
+
+"""
+Build a dict like {'precipitation10m': '10分間降水量', 'temp': '気温', ...}
+from the official selector info JSON.
+"""
 def load_elem_labels():
-    """
-    Build a dict like {'precipitation10m': '10分間降水量', 'temp': '気温', ...}
-    from the official selector info JSON.
-    """
+    import requests
     mapping = {}
-    sel = requests.get(JMA_SELECTOR, timeout=20).json()
-    # structure: {'selectors': [{'key': 'elem', 'values': [{name, enName, value}, ...]}, ...]}
-    for block in sel.get("selectors", []):
-        if block.get("key") == "elem":
+
+    try:
+        sel = requests.get(JMA_SELECTOR, timeout=20).json()
+    except Exception:
+        sel = None
+
+    # sel が dictでも list でも対応する
+    if isinstance(sel, dict) and "selectors" in sel:
+        blocks = sel["selectors"]
+    elif isinstance(sel, list):
+        blocks = sel
+    else:
+        blocks = []
+
+    for block in blocks:
+        if not isinstance(block, dict):
+            continue
+        key = block.get("key")
+        if key in ("elem", "elements"):  # どちらの表記でも
             for item in block.get("values", []):
-                mapping[item["value"]] = item["name"]
-    # fallback for common keys (in case the endpoint changes)
+                val = item.get("value")
+                name = item.get("name") or item.get("ja") or val
+                if val:
+                    mapping[val] = name
+
+    # 取得できなかった要素名はフォールバック（よく出るキー）
     mapping.setdefault("temp", "気温")
     mapping.setdefault("humidity", "湿度")
     mapping.setdefault("wind", "風速")
     mapping.setdefault("windDirection", "風向")
+    mapping.setdefault("gust", "最大瞬間風速")
+    mapping.setdefault("gustDirection", "最大瞬間風向")
     mapping.setdefault("precipitation10m", "10分間降水量")
     mapping.setdefault("precipitation1h", "1時間降水量")
     mapping.setdefault("precipitation3h", "3時間降水量")
     mapping.setdefault("precipitation24h", "24時間降水量")
-    mapping.setdefault("snowDepth", "積雪深")
     mapping.setdefault("sunshine10m", "10分間日照時間")
+    mapping.setdefault("snowDepth", "積雪深")
+    mapping.setdefault("pressure", "現地気圧")
+    mapping.setdefault("seaLevelPressure", "海面気圧")
+    mapping.setdefault("visibility", "視程")
     return mapping
+
 
 def flatten_values(row: dict):
     """Take first element if value is like [val, quality_flag]. Keep None if missing."""
