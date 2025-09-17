@@ -129,4 +129,4 @@ def notify_slack(text):
         print("Slack webhook not set; skip"); 
         return
     r = requests.post(SLACK_WEBHOOK, json={"text": text}, timeout=20)
-    print
+    print("Slack POST:", r.status_code, (r.text or "")[:200])
